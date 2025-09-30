@@ -1,34 +1,37 @@
+using System;
 using UnityEngine;
-using UnityEngine.Events;
 
-public class PlayerHealth : MonoBehaviour, IDamageable
+public class PlayerHealth : MonoBehaviour
 {
-    [System.Serializable] public class HealthEvent : UnityEvent<int,int> {} // (hp,max)
+    public int maxHealth = 100;
+    public int currentHealth;
 
-    [Header("Health")]
-    public int maxHP = 6;
-    public int startHP = 6;
+    // Fires whenever health changes (current, max)
+    public event Action<int,int> OnHealthChanged;
 
-    [Header("Events")]
-    public HealthEvent onHealthChanged;
-    public UnityEvent onDeath;
-
-    public int HP { get; private set; }
-
-    void Awake() => HP = Mathf.Clamp(startHP, 0, maxHP);
+    void Awake()
+    {
+        currentHealth = maxHealth;
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+    }
 
     public void TakeDamage(int amount)
     {
         if (amount <= 0) return;
-        HP = Mathf.Max(0, HP - amount);
-        onHealthChanged?.Invoke(HP, maxHP);
-        if (HP == 0) onDeath?.Invoke();
+        currentHealth = Mathf.Max(0, currentHealth - amount);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
     }
 
     public void Heal(int amount)
     {
         if (amount <= 0) return;
-        HP = Mathf.Min(maxHP, HP + amount);
-        onHealthChanged?.Invoke(HP, maxHP);
+        currentHealth = Mathf.Min(maxHealth, currentHealth + amount);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+    }
+
+    public void SetHealth(int value)
+    {
+        currentHealth = Mathf.Clamp(value, 0, maxHealth);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
     }
 }

@@ -3,14 +3,17 @@ using UnityEngine;
 [RequireComponent(typeof(Rigidbody2D), typeof(Collider2D))]
 public class EnemyAI_PatrolChase : MonoBehaviour
 {
-    public Transform player; // drag Player here (or we find by tag)
+    [Header("Target")]
+    public Transform player;                 // if left null, found by tag "Player"
+
     [Header("Movement")]
     public float moveSpeed = 3f;
     public float accel = 12f;
     public float decel = 14f;
+    public float stopDistance = 0.2f;        // stop jittering when basically on top of player
 
     [Header("Patrol")]
-    public float patrolTurnCheckDist = 0.4f; // edge/wall check
+    public float patrolTurnCheckDist = 0.4f; // wall check distance
     public LayerMask groundMask;
     public LayerMask wallMask;
     public bool startFacingRight = true;
@@ -18,17 +21,22 @@ public class EnemyAI_PatrolChase : MonoBehaviour
     [Header("Chase")]
     public float aggroRadius = 6f;
     public float deaggroRadius = 8f;
+    public bool avoidCliffsWhileChasing = true;
 
+    // --- internals ---
     Rigidbody2D rb;
-    Vector2 velRef;
-    int dir = 1; // +1 right, -1 left
+    Vector2 velRef;           // SmoothDamp ref for x-velocity
+    int dir = 1;              // +1 right, -1 left
     bool chasing = false;
+    Vector3 baseScale;
 
     void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         rb.freezeRotation = true;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+
+        baseScale = transform.localScale;
         dir = startFacingRight ? 1 : -1;
 
         if (player == null)
@@ -50,36 +58,61 @@ public class EnemyAI_PatrolChase : MonoBehaviour
         if (!chasing && dist <= aggroRadius) chasing = true;
         if (chasing && dist >= deaggroRadius) chasing = false;
 
-        if (chasing) ChaseStep();
+        if (chasing) ChaseStep(dist);
         else PatrolStep();
     }
 
     void PatrolStep()
     {
-        // flip on wall or ledge
-        if (WallAhead() || NoGroundAhead()) dir = -dir;
+        // flip on wall or at ledge
+        if (WallAhead() || NoGroundAhead())
+            dir = -dir;
 
         float targetX = dir * moveSpeed;
-        float vx = Mathf.SmoothDamp(rb.linearVelocity.x, targetX, ref velRef.x, (Mathf.Abs(targetX) > 0.01f ? 1f/accel : 1f/decel));
+        float smoothIn = 1f / Mathf.Max(0.0001f, accel);
+        float smoothOut = 1f / Mathf.Max(0.0001f, decel);
+        float vx = Mathf.SmoothDamp(
+            rb.linearVelocity.x,
+            targetX,
+            ref velRef.x,
+            (Mathf.Abs(targetX) > 0.01f ? smoothIn : smoothOut)
+        );
+
         rb.linearVelocity = new Vector2(vx, rb.linearVelocity.y);
 
         // face move direction
-        if (Mathf.Abs(vx) > 0.02f) transform.localScale = new Vector3(Mathf.Sign(vx), 1f, 1f);
+        if (Mathf.Abs(vx) > 0.02f)
+            transform.localScale = new Vector3(Mathf.Sign(vx) * Mathf.Abs(baseScale.x), baseScale.y, baseScale.z);
     }
 
-    void ChaseStep()
+    void ChaseStep(float distToPlayer)
     {
-        float dx = Mathf.Sign(player.position.x - transform.position.x);
-        dir = (int)dx;
+        float dx = player.position.x - transform.position.x;
 
-        float targetX = dx * moveSpeed;
-        float vx = Mathf.SmoothDamp(rb.linearVelocity.x, targetX, ref velRef.x, 1f/accel);
+        // close enough; brake to stop jitter
+        if (Mathf.Abs(dx) <= stopDistance)
+        {
+            float stopVx = Mathf.SmoothDamp(rb.linearVelocity.x, 0f, ref velRef.x, 1f / Mathf.Max(0.0001f, decel));
+            rb.linearVelocity = new Vector2(stopVx, rb.linearVelocity.y);
+            return;
+        }
+
+        dir = dx > 0 ? 1 : -1;
+
+        // optionally avoid running off cliffs while chasing
+        if (avoidCliffsWhileChasing && NoGroundAhead())
+        {
+            float brakeVx = Mathf.SmoothDamp(rb.linearVelocity.x, 0f, ref velRef.x, 1f / Mathf.Max(0.0001f, decel));
+            rb.linearVelocity = new Vector2(brakeVx, rb.linearVelocity.y);
+            return;
+        }
+
+        float targetX = dir * moveSpeed;
+        float vx = Mathf.SmoothDamp(rb.linearVelocity.x, targetX, ref velRef.x, 1f / Mathf.Max(0.0001f, accel));
         rb.linearVelocity = new Vector2(vx, rb.linearVelocity.y);
 
-        if (Mathf.Abs(vx) > 0.02f) transform.localScale = new Vector3(Mathf.Sign(vx), 1f, 1f);
-
-        // optional: avoid walking off cliffs while chasing
-        if (NoGroundAhead()) rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+        if (Mathf.Abs(vx) > 0.02f)
+            transform.localScale = new Vector3(Mathf.Sign(vx) * Mathf.Abs(baseScale.x), baseScale.y, baseScale.z);
     }
 
     bool WallAhead()
@@ -90,15 +123,26 @@ public class EnemyAI_PatrolChase : MonoBehaviour
 
     bool NoGroundAhead()
     {
-        Vector2 origin = (Vector2)transform.position + new Vector2(0.25f * dir, 0f);
+        // cast slightly ahead and down
+        Vector2 origin = (Vector2)transform.position + new Vector2(0.25f * dir, 0.05f);
         return !Physics2D.Raycast(origin, Vector2.down, 0.7f, groundMask);
     }
 
     void OnDrawGizmosSelected()
     {
+        // aggro/deaggro radii
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, aggroRadius);
         Gizmos.color = Color.gray;
         Gizmos.DrawWireSphere(transform.position, deaggroRadius);
+
+        // preview rays (uses current dir; safe in edit mode)
+        Gizmos.color = Color.red;
+        Vector3 wallOrigin = transform.position + new Vector3(0.2f * dir, 0.1f, 0f);
+        Gizmos.DrawLine(wallOrigin, wallOrigin + new Vector3(patrolTurnCheckDist * dir, 0f, 0f));
+
+        Gizmos.color = Color.cyan;
+        Vector3 groundOrigin = transform.position + new Vector3(0.25f * dir, 0.05f, 0f);
+        Gizmos.DrawLine(groundOrigin, groundOrigin + Vector3.down * 0.7f);
     }
 }
